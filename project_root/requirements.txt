@@ -1,0 +1,7 @@
+Flask
+python-dotenv
+requests
+Pillow
+pytesseract
+opencv-python-headless
+pytest
