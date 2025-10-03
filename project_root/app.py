@@ -1,9 +1,9 @@
 # app.py
 import os
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template
 from werkzeug.utils import secure_filename
 from ocr import extract_text_from_image
-from grading import grade_response
+from grade import grade_response
 
 app = Flask(__name__)
 
@@ -49,6 +49,26 @@ def evaluate():
 
     result = grade_response(extracted_text, answer_key)
     return jsonify(result), 200
+
+@app.route("/", methods=["GET", "POST"])
+def grading_input():
+    result = None
+    if request.method == "POST":
+        file = request.files.get("file")
+        answer_key_raw = request.form.get("answer_key")
+        if not file or not answer_key_raw:
+            result = "Both file and answer key are required."
+        else:
+            import json
+            try:
+                answer_key = json.loads(answer_key_raw)
+                extracted_text = extract_text_from_image(file.read())
+                graded = grade_response(extracted_text, answer_key)
+                import pprint
+                result = pprint.pformat(graded)
+            except Exception as e:
+                result = f"Error: {str(e)}"
+    return render_template("grading_input.html", result=result)
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
