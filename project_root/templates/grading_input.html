@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Exam Evaluator</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h2>Exam Evaluator</h2>
+        <form method="POST" enctype="multipart/form-data">
+            <label for="file">Upload Answer Script (Image):</label>
+            <input type="file" name="file" id="file" required><br><br>
+            <label for="answer_key">Answer Key (JSON):</label>
+            <textarea name="answer_key" id="answer_key" rows="8" cols="50" required></textarea><br><br>
+            <button type="submit">Grade</button>
+        </form>
+        {% if result %}
+        <div class="result">
+            <h3>Graded Result:</h3>
+            <pre>{{ result }}</pre>
+        </div>
+        {% endif %}
+    </div>
+</body>
+</html>
