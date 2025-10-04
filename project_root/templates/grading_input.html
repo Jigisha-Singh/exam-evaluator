@@ -7,19 +7,108 @@
 <body>
     <div class="container">
         <h2>Exam Evaluator</h2>
-        <form method="POST" enctype="multipart/form-data">
-            <label for="file">Upload Answer Script (Image):</label>
-            <input type="file" name="file" id="file" required><br><br>
-            <label for="answer_key">Answer Key (JSON):</label>
-            <textarea name="answer_key" id="answer_key" rows="8" cols="50" required></textarea><br><br>
-            <button type="submit">Grade</button>
+        <form id="evaluationForm" method="POST" enctype="multipart/form-data">
+            <h2>1. Upload Answer Sheet</h2>
+            <input type="file" name="answer_sheet" accept=".jpg, .jpeg, .png, .pdf" required> 
+
+            <h2>2. Enter Answer Key</h2>
+            <textarea name="answer_key" required rows="10" placeholder="Paste your model answer/key here..."></textarea>
+            
+            <button type="submit">Evaluate Exam</button>
         </form>
-        {% if result %}
-        <div class="result">
-            <h3>Graded Result:</h3>
-            <pre>{{ result }}</pre>
+
+        <div id="results" style="margin-top: 20px;">
+            {% if result %}
+            <div class="result">
+                <h3>Graded Result:</h3>
+                <pre>{{ result }}</pre>
+            </div>
+            {% endif %}
         </div>
-        {% endif %}
     </div>
+    <script>
+    document.getElementById('evaluationForm').addEventListener('submit', async function(event) {
+        event.preventDefault(); // 🛑 Stop the default form submission (prevents page reload)
+        
+        const form = event.target;
+        const formData = new FormData(form); // 📦 Package all form data (including the file)
+        const resultsDiv = document.getElementById('results');
+        
+        // Show a loading message while waiting for Gemini
+        resultsDiv.innerHTML = '<h3>Grading in progress... Please wait a moment.</h3>';
+
+        try {
+            // 🚀 Asynchronously send data to the Flask backend's /evaluate route
+            const response = await fetch('/evaluate', {
+                method: 'POST',
+                body: formData // Send the packaged form data
+            });
+
+            // 📝 Read the JSON response from the Flask backend
+            const data = await response.json(); 
+
+            if (response.ok) {
+                // Success (status code 200): Call the function to display the detailed report
+                displayGradeResults(data);
+            } else {
+                // Error (status code 400 or 500): Display the error message
+                resultsDiv.innerHTML = `<h3>Error: ${data.error || 'Unknown server error occurred'}</h3>`;
+            }
+        } catch (error) {
+            // Handle network connection issues
+            resultsDiv.innerHTML = `<h3>Network Error: Could not connect to the evaluation server.</h3>`;
+            console.error('Fetch error:', error);
+        }
+    });
+
+    // Replace the old displayGradeResults function with this improved version:
+    function displayGradeResults(data) {
+        const resultsDiv = document.getElementById('results');
+        
+        // Calculate the score percentage for the header
+        const percentage = ((data.total_score / data.max_score) * 100).toFixed(2);
+        
+        let html = `
+            <h2>Final Grade Report</h2>
+            <p><strong>Total Score:</strong> ${data.total_score} / ${data.max_score}</p>
+            <p><strong>Percentage:</strong> ${percentage}%</p>
+            
+            <table border="1" style="width:100%; margin-top: 15px; border-collapse: collapse;">
+                <tr>
+                    <th>Q No.</th>
+                    <th>Result</th>
+                    <th>Student Answer</th>
+                    <th>Correct Answer</th>
+                    <th>Feedback from Gemini</th>
+                </tr>
+        `;
+
+        // Loop through the 'results' array from the JSON
+        data.results.forEach(item => {
+            // Conditional styling based on whether the answer was correct
+            const rowClass = item.is_correct ? 'style="background-color: #e6ffe6;"' : 'style="background-color: #ffe6e6;"';
+            const correctIcon = item.is_correct ? '✅ Correct' : '❌ Incorrect';
+
+            html += `
+                <tr ${rowClass}>
+                    <td>${item.question_number}</td>
+                    <td>${correctIcon}</td>
+                    <td>${item.student_answer}</td>
+                    <td>${item.correct_answer}</td>
+                    <td>${item.feedback}</td>
+                </tr>
+            `;
+        });
+
+        html += `</table>`;
+        
+        // Inject the generated HTML into the 'results' div
+        resultsDiv.innerHTML = html;
+    }
+    </script>
+    {% raw %}
+    import google.generativeai as genai
+    {% endraw %}
 </body>
 </html>
+pip install google-generativeai
