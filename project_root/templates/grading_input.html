@@ -1,114 +1,85 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Exam Evaluator</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Automated Grader</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script>
+        // Simple client-side validation and loading indicator management
+        function validateAndSubmit(event) {
+            const form = event.target;
+            const notes = form.elements['notes_file'].files.length;
+            const answers = form.elements['answer_sheet_file'].files.length;
+            const prompt = form.elements['question_prompt'].value.trim();
+
+            if (!notes || !answers || !prompt) {
+                alert('Please upload both files and enter the exam question before submitting.');
+                event.preventDefault(); // Stop form submission
+                return false;
+            }
+
+            // Show loading indicator and hide previous output
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('output-container').innerHTML = '';
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const form = document.getElementById('grading-form');
+            form.addEventListener('submit', validateAndSubmit);
+
+            // Handle server response (if the page reloads due to POST)
+            // This part is handled by Flask rendering the output on the page reload
+        });
+    </script>
 </head>
 <body>
     <div class="container">
-        <h2>Exam Evaluator</h2>
-        <form id="evaluationForm" method="POST" enctype="multipart/form-data">
-            <h2>1. Upload Answer Sheet</h2>
-            <input type="file" name="answer_sheet" accept=".jpg, .jpeg, .png, .pdf" required> 
+        <h1>Automated Student Grader with Gemini AI</h1>
 
-            <h2>2. Enter Answer Key</h2>
-            <textarea name="answer_key" required rows="10" placeholder="Paste your model answer/key here..."></textarea>
-            
-            <button type="submit">Evaluate Exam</button>
+        <form id="grading-form" action="/grade" method="POST" enctype="multipart/form-data">
+
+            <!-- 1st User Input: Notes/Study Material -->
+            <div>
+                <label for="notes_file">1. Upload Study Material / Teacher Notes (JPG, PNG, PDF)</label>
+                <input type="file" id="notes_file" name="notes_file" accept=".jpg,.jpeg,.png,.pdf" required>
+            </div>
+
+            <!-- 2nd User Input: Student Answer Sheet -->
+            <div>
+                <label for="answer_sheet_file">2. Upload Student Answer Sheet (JPG, PNG, PDF)</label>
+                <input type="file" id="answer_sheet_file" name="answer_sheet_file" accept=".jpg,.jpeg,.png,.pdf" required>
+            </div>
+
+            <!-- 3rd User Input: Exam Question Context -->
+            <div>
+                <label for="question_prompt">3. Enter the Specific Exam Question / Prompt</label>
+                <textarea id="question_prompt" name="question_prompt" placeholder="E.g., 'Explain the process of photosynthesis and list the required inputs.'" required></textarea>
+            </div>
+
+            <button type="submit">Generate Grade & Feedback</button>
         </form>
 
-        <div id="results" style="margin-top: 20px;">
-            {% if result %}
-            <div class="result">
-                <h3>Graded Result:</h3>
-                <pre>{{ result }}</pre>
+        <div id="loading" class="loading-indicator">
+            Grading in progress... Analyzing content and similarity with Gemini AI. This may take a moment.
+        </div>
+
+        <div id="output-container">
+            {% if grade_result %}
+            <div class="output-grade">Grade: {{ grade_result.grade }}</div>
+            <div class="output-feedback">
+                <h3>Detailed Feedback</h3>
+                <pre>{{ grade_result.feedback }}</pre>
+            </div>
+            {% endif %}
+
+            {% if error %}
+            <div class="output-feedback" style="background-color: #fbe9e9; border-color: #e6c8c8;">
+                <h3>Error</h3>
+                <p>{{ error }}</p>
             </div>
             {% endif %}
         </div>
     </div>
-    <script>
-    document.getElementById('evaluationForm').addEventListener('submit', async function(event) {
-        event.preventDefault(); // 🛑 Stop the default form submission (prevents page reload)
-        
-        const form = event.target;
-        const formData = new FormData(form); // 📦 Package all form data (including the file)
-        const resultsDiv = document.getElementById('results');
-        
-        // Show a loading message while waiting for Gemini
-        resultsDiv.innerHTML = '<h3>Grading in progress... Please wait a moment.</h3>';
-
-        try {
-            // 🚀 Asynchronously send data to the Flask backend's /evaluate route
-            const response = await fetch('/evaluate', {
-                method: 'POST',
-                body: formData // Send the packaged form data
-            });
-
-            // 📝 Read the JSON response from the Flask backend
-            const data = await response.json(); 
-
-            if (response.ok) {
-                // Success (status code 200): Call the function to display the detailed report
-                displayGradeResults(data);
-            } else {
-                // Error (status code 400 or 500): Display the error message
-                resultsDiv.innerHTML = `<h3>Error: ${data.error || 'Unknown server error occurred'}</h3>`;
-            }
-        } catch (error) {
-            // Handle network connection issues
-            resultsDiv.innerHTML = `<h3>Network Error: Could not connect to the evaluation server.</h3>`;
-            console.error('Fetch error:', error);
-        }
-    });
-
-    // Replace the old displayGradeResults function with this improved version:
-    function displayGradeResults(data) {
-        const resultsDiv = document.getElementById('results');
-        
-        // Calculate the score percentage for the header
-        const percentage = ((data.total_score / data.max_score) * 100).toFixed(2);
-        
-        let html = `
-            <h2>Final Grade Report</h2>
-            <p><strong>Total Score:</strong> ${data.total_score} / ${data.max_score}</p>
-            <p><strong>Percentage:</strong> ${percentage}%</p>
-            
-            <table border="1" style="width:100%; margin-top: 15px; border-collapse: collapse;">
-                <tr>
-                    <th>Q No.</th>
-                    <th>Result</th>
-                    <th>Student Answer</th>
-                    <th>Correct Answer</th>
-                    <th>Feedback from Gemini</th>
-                </tr>
-        `;
-
-        // Loop through the 'results' array from the JSON
-        data.results.forEach(item => {
-            // Conditional styling based on whether the answer was correct
-            const rowClass = item.is_correct ? 'style="background-color: #e6ffe6;"' : 'style="background-color: #ffe6e6;"';
-            const correctIcon = item.is_correct ? '✅ Correct' : '❌ Incorrect';
-
-            html += `
-                <tr ${rowClass}>
-                    <td>${item.question_number}</td>
-                    <td>${correctIcon}</td>
-                    <td>${item.student_answer}</td>
-                    <td>${item.correct_answer}</td>
-                    <td>${item.feedback}</td>
-                </tr>
-            `;
-        });
-
-        html += `</table>`;
-        
-        // Inject the generated HTML into the 'results' div
-        resultsDiv.innerHTML = html;
-    }
-    </script>
-    {% raw %}
-    import google.generativeai as genai
-    {% endraw %}
 </body>
 </html>
-pip install google-generativeai

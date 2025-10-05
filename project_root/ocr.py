@@ -1,48 +1,47 @@
-# ocr.py
 import os
 import io
-from PIL import Image
-import numpy as np
-import cv2
-import requests
+from google.genai.types import Part
+from werkzeug.datastructures import FileStorage
 
-OCR_PROVIDER = os.getenv("OCR_PROVIDER", "tesseract")  # "tesseract" or "remote"
-OCR_API_URL = os.getenv("OCR_API_URL")
-OCR_API_KEY = os.getenv("OCR_API_KEY")
-
-def preprocess_image_bytes(image_bytes):
-    # simple denoise/threshold using OpenCV
-    arr = np.asarray(bytearray(image_bytes), dtype=np.uint8)
-    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    _, th = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    _, enc = cv2.imencode(".jpg", th)
-    return enc.tobytes()
-
-def extract_with_tesseract(image_bytes):
-    try:
-        from PIL import Image
-        import pytesseract
-    except ImportError:
-        raise RuntimeError("Install pytesseract & pillow for local OCR")
-    pre = preprocess_image_bytes(image_bytes)
-    im = Image.open(io.BytesIO(pre))
-    text = pytesseract.image_to_string(im, lang='eng')
-    return text
-
-def extract_with_remote_api(image_bytes):
-    if not OCR_API_URL or not OCR_API_KEY:
-        raise RuntimeError("OCR_API_URL and OCR_API_KEY must be set for remote provider")
-    files = {"file": ("image.jpg", image_bytes, "image/jpeg")}
-    headers = {"Authorization": f"Bearer {OCR_API_KEY}"}
-    resp = requests.post(OCR_API_URL, headers=headers, files=files, timeout=30)
-    resp.raise_for_status()
-    # assume API returns JSON with `text` field; adapt per provider
-    data = resp.json()
-    return data.get("text") or data.get("extracted_text") or resp.text
-
-def extract_text_from_image(image_bytes: bytes) -> str:
-    if OCR_PROVIDER == "tesseract":
-        return extract_with_tesseract(image_bytes)
+def get_mime_type(filename):
+    """
+    Determines the MIME type based on the file extension.
+    This is necessary for the Gemini API to correctly interpret the file data.
+    """
+    ext = os.path.splitext(filename)[1].lower()
+    if ext in ['.jpg', '.jpeg']:
+        return 'image/jpeg'
+    elif ext == '.png':
+        return 'image/png'
+    elif ext == '.pdf':
+        # The API supports PDF directly as application/pdf for multimodal analysis.
+        return 'application/pdf'
     else:
-        return extract_with_remote_api(image_bytes)
+        # Default to octet-stream for unknown types
+        return 'application/octet-stream'
+
+def file_to_part(uploaded_file: FileStorage) -> Part:
+    """
+    Converts an uploaded Werkzeug FileStorage object into a Gemini API Part object,
+    reading the file content into memory and assigning the correct MIME type.
+
+    Args:
+        uploaded_file: The file object from Flask's request.files.
+
+    Returns:
+        A google.genai.types.Part object for the API request.
+    """
+    # Read file content into memory
+    # We must read the file here since it's an in-memory object stream.
+    file_bytes = uploaded_file.read()
+
+    # Determine MIME type
+    mime_type = get_mime_type(uploaded_file.filename)
+
+    # Reset file pointer to the beginning for safety, in case Flask needs it later
+    uploaded_file.seek(0)
+    
+    return Part.from_bytes(
+        data=file_bytes,
+        mime_type=mime_type
+    )
