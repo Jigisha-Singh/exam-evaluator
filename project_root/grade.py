@@ -1,103 +1,104 @@
-{
-  "q1": {"answer": "Paris", "points": 1, "type": "exact"},
-  "q2": {"answer": "42", "points": 1, "type": "numeric", "tolerance": 0},
-  "q3": {"keywords": ["treaty", "Versailles"], "points": 2, "type": "keywords"},
-  "q4": {"pattern": "^\\d{4}$", "points": 1, "type": "regex"}
-}
-# grading.py
-import re
-from difflib import SequenceMatcher
+import os
+import json
+from dotenv import load_dotenv
+from google import genai
+from google.genai.errors import APIError
+from ocr import file_to_part
+from werkzeug.datastructures import FileStorage
 
-def parse_answers_from_text(text):
-    # Try Q#: text lines like "q1: answer"
-    pattern = re.compile(r'^\s*(?:q|question)\s*(\d+)\s*[:\)\.-]\s*(.*)$', re.I)
-    answers = {}
-    for line in text.splitlines():
-        m = pattern.match(line)
-        if m:
-            qid = f"q{int(m.group(1))}"
-            answers[qid] = m.group(2).strip()
-    return answers
+# Load environment variables from .env file
+load_dotenv()
 
-def similarity(a, b):
-    return SequenceMatcher(None, a, b).ratio()
+# Configuration
+GEMINI_MODEL = 'gemini-2.5-flash-preview-05-20'
 
-def grade_question(student_ans, key):
-    typ = key.get("type", "exact")
-    points = key.get("points", 1)
-    awarded = 0
-    feedback = ""
-    if student_ans is None:
-        return 0, "no answer"
-    s = student_ans.strip().lower()
-    if typ == "exact":
-        correct = key["answer"].strip().lower()
-        if s == correct:
-            awarded = points
-            feedback = "exact match"
-    elif typ == "numeric":
-        try:
-            val = float(re.sub(r'[^\d\.\-]', '', s))
-            target = float(key["answer"])
-            tol = float(key.get("tolerance", 0))
-            if abs(val - target) <= tol:
-                awarded = points
-                feedback = "numeric match"
-            else:
-                feedback = f"numeric mismatch (got {val})"
-        except Exception:
-            feedback = "could not parse numeric answer"
-    elif typ == "regex":
-        pat = re.compile(key["pattern"], re.I)
-        if pat.search(s):
-            awarded = points
-            feedback = "regex match"
-    elif typ == "keywords":
-        keywords = key.get("keywords", [])
-        matches = sum(1 for kw in keywords if kw.lower() in s)
-        if matches:
-            awarded = round(points * matches / max(1, len(keywords)), 2)
-            feedback = f"{matches}/{len(keywords)} keywords"
-    elif typ == "fuzzy":
-        target = key["answer"].strip().lower()
-        sim = similarity(s, target)
-        thresh = key.get("threshold", 0.8)
-        if sim >= thresh:
-            awarded = points
-            feedback = f"fuzzy match (sim={sim:.2f})"
-        else:
-            feedback = f"low similarity (sim={sim:.2f})"
-    else:
-        # fallback exact
-        if s == key.get("answer", "").strip().lower():
-            awarded = points
-            feedback = "exact fallback match"
+def grade_submission(notes_file: FileStorage, answer_sheet_file: FileStorage, question_prompt: str) -> dict:
+    """
+    Grades a student's submission using the Gemini API based on provided notes and question.
 
-    return awarded, feedback
+    Args:
+        notes_file: The FileStorage object for the teacher's notes.
+        answer_sheet_file: The FileStorage object for the student's answer sheet.
+        question_prompt: The text of the question the student answered.
 
-def grade_response(extracted_text, answer_key):
-    # extracted_text can be a string or dict of {qid: answer}
-    if isinstance(extracted_text, str):
-        parsed = parse_answers_from_text(extracted_text)
-    elif isinstance(extracted_text, dict):
-        parsed = extracted_text
-    else:
-        raise ValueError("extracted_text must be string or dict")
+    Returns:
+        A dictionary containing the 'grade' and 'feedback' from the model, or an error.
+    """
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        return {"error": "GEMINI_API_KEY not found. Please check your .env file."}
 
-    total_points = sum(v.get("points", 1) for v in answer_key.values())
-    score = 0
-    details = {}
+    try:
+        # 1. Initialize the client
+        client = genai.Client(api_key=api_key)
 
-    for qid, key in answer_key.items():
-        student = parsed.get(qid)
-        awarded, feedback = grade_question(student, key)
-        score += awarded
-        details[qid] = {
-            "student": student,
-            "awarded": awarded,
-            "max": key.get("points", 1),
-            "feedback": feedback
+        # 2. Convert files to multimodal Parts
+        notes_part = file_to_part(notes_file)
+        answer_part = file_to_part(answer_sheet_file)
+        
+        # 3. Define the System Instruction for precise grading
+        system_instruction = (
+            "You are a strict but fair academic grader. Your task is to grade a student's answer sheet "
+            "based on the provided teacher's notes/study material and the original exam question. "
+            "You MUST compare the keywords, concepts, and accuracy of the student's answer against the notes. "
+            "The grade must be a letter (A, B, C, D, F) or a percentage (0-100). "
+            "Provide detailed, constructive feedback explaining the grade, referencing where the student's answer matched "
+            "or deviated from the notes. Respond ONLY with a single JSON object that strictly adheres to the provided schema."
+        )
+
+        # 4. Define the User Prompt and Content Parts
+        user_prompt = (
+            "Please grade the student's answer sheet. "
+            f"The original exam question was: '{question_prompt}'. "
+            "The first attached file is the official teacher's notes/study material. "
+            "The second attached file is the student's answer. "
+            "Use the notes as the definitive source for correct information."
+        )
+        
+        content = [
+            notes_part,
+            answer_part,
+            user_prompt
+        ]
+        
+        # 5. Define the Structured JSON Schema for the output (MANDATORY for reliable grading)
+        response_schema = {
+            "type": "OBJECT",
+            "properties": {
+                "grade": {"type": "STRING", "description": "The final letter grade or percentage, e.g., 'A' or '92%'."},
+                "feedback": {"type": "STRING", "description": "Detailed, constructive feedback based on comparison to notes."}
+            },
+            "required": ["grade", "feedback"]
         }
 
-    percent = round((score / total_points) * 100, 2) if total_points else 0
-    return {"score": score, "max_score": total_points, "percentage": percent, "details": details}
+        # 6. Call the Gemini API
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=content,
+            config={
+                "system_instruction": system_instruction,
+                "response_mime_type": "application/json",
+                "response_schema": response_schema
+            }
+        )
+
+        # 7. Process the JSON response
+        try:
+            # The model returns a JSON string in the text part
+            json_text = response.text.strip()
+            result = json.loads(json_text)
+            return result
+        except json.JSONDecodeError as e:
+            print(f"Error decoding JSON response: {e}. Raw response: {response.text}")
+            return {"error": f"Model returned unparseable JSON. Raw output: {response.text[:200]}..."}
+        except Exception as e:
+            return {"error": f"An unexpected error occurred while processing the response: {e}"}
+
+    except APIError as e:
+        return {"error": f"Gemini API Error: {e.message}"}
+    except Exception as e:
+        return {"error": f"An unknown error occurred: {e}"}
+
+# Example usage (for testing purposes, not used by Flask directly)
+if __name__ == '__main__':
+    print("This file contains the grading logic and should be imported by app.py.")
