@@ -1,104 +1,72 @@
-import os
-import json
-from dotenv import load_dotenv
-from google import genai
-from google.genai.errors import APIError
-from ocr import file_to_part
-from werkzeug.datastructures import FileStorage
+# grade.py
 
-# Load environment variables from .env file
-load_dotenv()
+import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
 
-# Configuration
-GEMINI_MODEL = 'gemini-2.5-flash-preview-05-20'
+# Import the pre-loaded global model
+from model_loader import MODEL 
+from ocr import run_ocr
 
-def grade_submission(notes_file: FileStorage, answer_sheet_file: FileStorage, question_prompt: str) -> dict:
+
+def grade_submission(notes_file, answer_sheet_file):
+
+    # 1. Run OCR on the Answer Sheet
+    ocr_results = run_ocr(answer_sheet_file)
+    if "error" in ocr_results:
+        return {"error": f"Failed to process answer sheet: {ocr_results['error']}"}
+
+    # 2. Extract Relevant Information
+    student_answer = ocr_results
+    model_answer = "Expected answer from notes"  # Placeholder for actual model answer extraction
+
+    # 3. Calculate Semantic Score
+    score = calculate_semantic_score(model_answer, student_answer, max_marks=10.0)
+
+    return {
+        "student_answer": student_answer,
+        "model_answer": model_answer,
+        "score": score
+    }
+
+def calculate_semantic_score(model_answer: str, student_answer: str, max_marks: float) -> dict:
     """
-    Grades a student's submission using the Gemini API based on provided notes and question.
-
-    Args:
-        notes_file: The FileStorage object for the teacher's notes.
-        answer_sheet_file: The FileStorage object for the student's answer sheet.
-        question_prompt: The text of the question the student answered.
-
-    Returns:
-        A dictionary containing the 'grade' and 'feedback' from the model, or an error.
+    Calculates a score for a subjective answer by comparing its semantic meaning
+    to the model answer using Cosine Similarity on Sentence Embeddings.
+    
+    Returns a dictionary with the score, raw similarity, and a reason.
     """
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        return {"error": "GEMINI_API_KEY not found. Please check your .env file."}
+    
+    # 1. Check for Model Availability and Empty Answer
+    if MODEL is None:
+        return {"score": 0.0, "similarity": 0.0, "reason": "AI model failed to load. Cannot grade semantically."}
 
+    if not student_answer or not student_answer.strip():
+        return {"score": 0.0, "similarity": 0.0, "reason": "Student answer was empty or only whitespace."}
+    
     try:
-        # 1. Initialize the client
-        client = genai.Client(api_key=api_key)
-
-        # 2. Convert files to multimodal Parts
-        notes_part = file_to_part(notes_file)
-        answer_part = file_to_part(answer_sheet_file)
+        # 2. Generate Embeddings
+        # The model converts the text into numerical vectors (embeddings)
+        embeddings = MODEL.encode([model_answer, student_answer])
         
-        # 3. Define the System Instruction for precise grading
-        system_instruction = (
-            "You are a strict but fair academic grader. Your task is to grade a student's answer sheet "
-            "based on the provided teacher's notes/study material and the original exam question. "
-            "You MUST compare the keywords, concepts, and accuracy of the student's answer against the notes. "
-            "The grade must be a letter (A, B, C, D, F) or a percentage (0-100). "
-            "Provide detailed, constructive feedback explaining the grade, referencing where the student's answer matched "
-            "or deviated from the notes. Respond ONLY with a single JSON object that strictly adheres to the provided schema."
-        )
-
-        # 4. Define the User Prompt and Content Parts
-        user_prompt = (
-            "Please grade the student's answer sheet. "
-            f"The original exam question was: '{question_prompt}'. "
-            "The first attached file is the official teacher's notes/study material. "
-            "The second attached file is the student's answer. "
-            "Use the notes as the definitive source for correct information."
-        )
+        # 3. Calculate Cosine Similarity (a value between 0.0 and 1.0)
+        similarity_score = cosine_similarity(
+            embeddings[0].reshape(1, -1),
+            embeddings[1].reshape(1, -1)
+        )[0][0]
         
-        content = [
-            notes_part,
-            answer_part,
-            user_prompt
-        ]
+        # 4. Calculate Final Score
+        # Scale the 0-1 similarity score to the question's max_marks
+        assigned_marks = round(float(similarity_score) * max_marks, 2)
         
-        # 5. Define the Structured JSON Schema for the output (MANDATORY for reliable grading)
-        response_schema = {
-            "type": "OBJECT",
-            "properties": {
-                "grade": {"type": "STRING", "description": "The final letter grade or percentage, e.g., 'A' or '92%'."},
-                "feedback": {"type": "STRING", "description": "Detailed, constructive feedback based on comparison to notes."}
-            },
-            "required": ["grade", "feedback"]
+        return {
+            "score": assigned_marks,
+            "similarity": float(similarity_score),
+            "reason": f"Scored based on {round(float(similarity_score)*100, 1)}% semantic similarity."
         }
-
-        # 6. Call the Gemini API
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=content,
-            config={
-                "system_instruction": system_instruction,
-                "response_mime_type": "application/json",
-                "response_schema": response_schema
-            }
-        )
-
-        # 7. Process the JSON response
-        try:
-            # The model returns a JSON string in the text part
-            json_text = response.text.strip()
-            result = json.loads(json_text)
-            return result
-        except json.JSONDecodeError as e:
-            print(f"Error decoding JSON response: {e}. Raw response: {response.text}")
-            return {"error": f"Model returned unparseable JSON. Raw output: {response.text[:200]}..."}
-        except Exception as e:
-            return {"error": f"An unexpected error occurred while processing the response: {e}"}
-
-    except APIError as e:
-        return {"error": f"Gemini API Error: {e.message}"}
+        
     except Exception as e:
-        return {"error": f"An unknown error occurred: {e}"}
+        # Fallback for unexpected errors during encoding/similarity
+        return {"score": 0.0, "similarity": 0.0, "reason": f"Error during AI grading: {e}"}
 
-# Example usage (for testing purposes, not used by Flask directly)
-if __name__ == '__main__':
-    print("This file contains the grading logic and should be imported by app.py.")
+# NOTE: You can add other simple grading functions here (e.g., for MCQ/Keywords) 
+# but this is your main semantic scoring function.

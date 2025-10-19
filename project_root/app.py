@@ -15,9 +15,13 @@ app = Flask(__name__, static_url_path='/static')
 
 # --- Routes ---
 
-@app.route('/', methods=['GET'])
-def index():
+# app.py (Corrected)
+
+@app.route('/')
+def home():
     """Renders the main grading input form."""
+    # Your actual code to render a template goes here
+    # e.g., return render_template('index.html')
     return render_template('grading_input.html')
 
 @app.route('/grade', methods=['POST'])
@@ -37,7 +41,7 @@ def grade():
     # 2. Call the Gemini Grading Service
     # We pass the in-memory FileStorage objects directly
     try:
-        grade_result = grade_submission(notes_file, answer_sheet_file, question_prompt)
+        grade_result = grade_submission(notes_file, answer_sheet_file)
     except Exception as e:
         print(f"FATAL ERROR during grading: {e}")
         grade_result = {"error": "A server error occurred during the AI grading process."}
@@ -67,3 +71,4 @@ if __name__ == '__main__':
     # Start the application
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
+ 
