@@ -41,7 +41,7 @@ def grade():
     # 2. Call the Gemini Grading Service
     # We pass the in-memory FileStorage objects directly
     try:
-        grade_result = grade_submission(notes_file, answer_sheet_file)
+        grade_result = grade_submission(notes_file, answer_sheet_file, question_prompt)
     except Exception as e:
         print(f"FATAL ERROR during grading: {e}")
         grade_result = {"error": "A server error occurred during the AI grading process."}

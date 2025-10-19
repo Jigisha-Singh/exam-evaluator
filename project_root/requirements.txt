@@ -6,5 +6,8 @@ pytesseract
 opencv-python-headless
 pytest
 google-genai
+scikit-learn
+sentence-transformers
+numpy
 Pillow
 python-dotenv  # Recommended for handling API keys securely
